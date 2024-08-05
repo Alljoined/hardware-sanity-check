@@ -306,7 +306,7 @@ def validate_block(block_trials):
 
     return True
 
-def create_trials(n_images, n_oddballs, num_blocks):
+def create_trials(n_images, n_oddballs, num_blocks, num_imgs_in_group):
     trials = []
     for block in range(num_blocks):
         isValidBlock = False
@@ -330,7 +330,8 @@ def create_trials(n_images, n_oddballs, num_blocks):
             trials.append({
                 'block': (block + 1), 
                 'image': trial, 
-                'end_of_block': (idx == len(block_trials) - 1)
+                'end_of_block': (idx == len(block_trials) - 1),
+                'end_of_group': (idx + 1) % num_imgs_in_group == 0
             })
 
     return trials
@@ -429,19 +430,21 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         fixation_dot = visual.Circle(window, size=(0.2,0.2), fillColor=(1, -1, -1), lineColor=(-1, -1, -1), opacity=0.5, edges=128, units="degFlat")
         fixation_dot.draw()
         # Send trigger
-        stim_time = time.time() * 1000
+        stim_time = time.time() * 100
         await message_queue.put({'label': 'stim', 'value': indices[trial['image'] - 1] if not is_oddball else 100000, 'time': stim_time})
         # Display the image
         window.flip()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1) # 100ms soa
 
         # Rest screen with a fixation cross
         display_dot_with_jitter(window, 0.1, 0.4)
 
-        keys = event.getKeys(keyList=["escape", "space"], timeStamped=global_clock)
+        keys = event.getKeys(keyList=["escape", "space", "left", "right"], timeStamped=global_clock)
 
         escape_pressed = False
         space_pressed = False
+        left_pressed = False
+        right_pressed = False
         space_time = None
         for key, timestamp in keys:
             if key == "escape":
@@ -449,6 +452,10 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
             elif key == "space":
                 space_pressed = True
                 space_time = (experiment_start_time + timestamp) * 1000
+            elif key == "left":
+                left_pressed = True
+            elif key == "right":
+                right_pressed = True
 
         if escape_pressed: # Terminate experiment early if escape is pressed
             print("Experiment terminated early.")
@@ -475,6 +482,10 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
             # print("Oddball, no space")
             await message_queue.put({'label': 'behav', 'value': 3, 'time': stim_time + 600})
 
+        if trial['end_of_group']:
+            if EMOTIV_ON:
+                group_message = f"Press the left arrow key if you saw Shrek in the group,\n otherwise press the right arrow key.\nPress space afterwards to continue."
+                display_message(window, group_message, block=True)
         # Check if end of block
         if trial['end_of_block']:
             if EMOTIV_ON:
@@ -559,16 +570,18 @@ async def main():
     mouse.setPos((2560, 1440))
     
     # Production Parameters
-    n_images = 208  # Number of unique images per block (default 208)
+    n_images = 200  # Number of unique images per block (default 208)
     n_oddballs = 24  # Number of oddball images per block (default 24)
     num_blocks = 16  # Number of blocks
+    num_imgs_in_group = 20
 
     # Dev Parameters
     # n_images = 10  # Number of unique images per block (default 208)
     # n_oddballs = 0  # Number of oddball images per block (default 24)
     # num_blocks = 10
+    # num_imgs_in_group = 5
 
-    trials = create_trials(n_images, n_oddballs, num_blocks)
+    trials = create_trials(n_images, n_oddballs, num_blocks, num_imgs_in_group)
 
     # Setup EEG
     async with websockets.connect("wss://localhost:6868", ssl=ssl_context) as websocket:
