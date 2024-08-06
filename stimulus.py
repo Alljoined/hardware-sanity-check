@@ -294,48 +294,69 @@ async def process_triggers(websocket):
         await record_trigger(message, websocket, False)
         message_queue.task_done()
 
+def validate_group(image_indices: list, group_start_index, group_end_index) -> int:
+    """
+    Checks that there are no images repeated more than 3 times in a row in a given group.
 
-def validate_block(block_trials):
-    # Check for consecutive oddballs or oddball at the start
-    if block_trials[0] == -1:
-        return False  # Cannot start with an oddball
+    Returns the index of the first image that gets repeated 3 times in a row.
+    If the block has no image that gets repeated 3 times in a row, returns -1
+    """
+    for index in range(group_start_index + 2, group_end_index):
+        if image_indices[index - 2] == image_indices[index - 1] == image_indices[index]:
+            return index
+        
+    return -1
 
-    for i in range(len(block_trials)-2):
-        if block_trials[i] == -1 and (block_trials[i+1] == -1 or block_trials[i+2] == -1):
-            return False  # No back-to-back oddballs or repeated sequence
+def create_trials(num_unique_images: int, num_blocks: int, num_groups: int, group_size: int) -> list:
+    # Create a list of random numbers of range [0, num_unique_images)
+    # and of length num_blocks * num_groups * group_size
+    num_total_images = num_blocks * num_groups * group_size
+    images = [random.randrange(num_unique_images) for i in range(num_total_images)]
 
-    return True
+    # Verify and fix each group so there are no images repeated 3 times in a row in a group
+    for block_index in range(num_blocks):
+        block_start_index = block_index * num_groups * group_size
+        for group_index in range(num_groups):
+            is_valid_group = False
+            while not is_valid_group:
+                is_valid_group = True
+                group_start_index = block_start_index + group_index * group_size
+                group_end_index = group_start_index + group_size
 
-def create_trials(n_images, n_oddballs, num_blocks, num_imgs_in_group):
+                # Verify the block
+                result_index = validate_group(images, group_start_index, group_end_index)
+
+                # Fix it by regenerating the third repeated image if necessary
+                if result_index != -1:
+                    images[result_index] = random.randrange(num_unique_images)
+                    is_valid_group = False
+
     trials = []
-    for block in range(num_blocks):
-        isValidBlock = False
-        block_trials = []
-        while not isValidBlock:
-            # Generate trials for each block
-            start = block * n_images + 1
-            end = start + n_images
-            images = list(range(start, end))
-            oddballs = [-1] * n_oddballs
-            block_trials = images + oddballs
-            
-            while True:
-                random.shuffle(block_trials)
-                if validate_block(block_trials):
-                    break
-            
-            isValidBlock = True
 
-        for idx, trial in enumerate(block_trials):
+    for block_index in range(num_blocks):
+        block_start_index = num_blocks * block_index
+        block_end_index = block_start_index + group_size
+
+        block_trials = images[block_start_index:block_end_index]
+        
+        # Each group has a 6/51 chance of containing an oddball
+        contains_oddball = random.randrange(0, 51) < 6
+
+        if contains_oddball:
+            # Put the oddball at any index except the first.
+            oddball_index = random.randrange(1, group_size + 1)
+            
+            block_trials.insert(oddball_index, -1)
+
+        for block_trial_index, block_trial in enumerate(block_trials):
             trials.append({
-                'block': (block + 1), 
-                'image': trial, 
-                'end_of_block': (idx == len(block_trials) - 1),
-                'end_of_group': (idx + 1) % num_imgs_in_group == 0
+                'block': block_index + 1,
+                'image': block_trial,
+                'end_of_block': (block_trial_index == len(block_trials) - 1),
+                'end_of_group': ()
             })
 
     return trials
-
 
 def display_instructions(window, session_number):
     instruction_text = (
@@ -570,18 +591,12 @@ async def main():
     mouse.setPos((2560, 1440))
     
     # Production Parameters
-    n_images = 200  # Number of unique images per block (default 208)
-    n_oddballs = 24  # Number of oddball images per block (default 24)
-    num_blocks = 16  # Number of blocks
-    num_imgs_in_group = 20
-
-    # Dev Parameters
-    # n_images = 10  # Number of unique images per block (default 208)
-    # n_oddballs = 0  # Number of oddball images per block (default 24)
-    # num_blocks = 10
-    # num_imgs_in_group = 5
-
-    trials = create_trials(n_images, n_oddballs, num_blocks, num_imgs_in_group)
+    # todo: cursor speed of 10
+    num_unique_images = 200
+    num_blocks = 16
+    group_size = 20
+    
+    trials: list = create_trials(num_unique_images, num_blocks, group_size)
 
     # Setup EEG
     async with websockets.connect("wss://localhost:6868", ssl=ssl_context) as websocket:
@@ -591,7 +606,7 @@ async def main():
         
         # Run the experiment
         if EMOTIV_ON:
-            experiment_task = asyncio.create_task(run_experiment(trials, window, websocket, participant_info['Subject'], participant_info['Session'], n_images, num_blocks))
+            experiment_task = asyncio.create_task(run_experiment(trials, window, websocket, participant_info['Subject'], participant_info['Session'], num_unique_images, num_blocks))
             recording_task = asyncio.create_task(process_triggers(websocket))
             await asyncio.gather(experiment_task, recording_task) #return exceptions=True
 
