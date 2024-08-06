@@ -371,7 +371,7 @@ def display_instructions(window, session_number, num_blocks: int):
         "In this session, you will complete a perception task.\n"
         f"This session consists of {num_blocks} experimental block{'s' if num_blocks > 1 else ''}.\n\n"
         "You will see sequences of images appearing on the screen, your task is to "
-        "indicate if a white circle with a black border is in the sequence.\n\n"
+        "indicate if an image of Woody is in the sequence.\n\n"
         "Sit comfortably, and keep your gaze focused on the red dot.\n\n"
         "When you are ready, press the space bar to start."
     )
@@ -409,7 +409,7 @@ def getImages(subj, session, n_images, num_blocks):
 
 async def run_experiment(trials, window, websocket, subj, session, n_images, num_blocks):
     # Load oddball image
-    oddball_image = Image.open("./stimulus/oddball.jpg")
+    oddball_images = [Image.open(f"./stimulus/oddballs/{i:02d}.jpg") for i in range(9)]
 
     # Initialize an empty list to hold the image numbers for the current block
     image_sequence = []
@@ -449,7 +449,8 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         is_oddball = (trial['image'] == -1)
         if is_oddball:
             current_block_contains_oddball = True
-            image = oddball_image
+            image = oddball_images[0]
+            oddball_images.append(oddball_images.pop(0))
         else:
             image = images[trial['image'] - 1] # Recall that trial['images] 1-indexed and images is 0 indexed
 
@@ -465,7 +466,7 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         fixation_dot = visual.Circle(window, size=(0.2,0.2), fillColor=(1, -1, -1), lineColor=(-1, -1, -1), opacity=0.5, edges=128, units="degFlat")
         fixation_dot.draw()
         # Send trigger
-        stim_time = time.time() * 100
+        stim_time = time.time() * 1000
         await message_queue.put({'label': 'stim', 'value': indices[trial['image'] - 1] if not is_oddball else 100000, 'time': stim_time})
         # Display the image
         window.flip()
@@ -495,7 +496,7 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         if trial['end_of_group']:
             if EMOTIV_ON:
                 await asyncio.sleep(0.75) # blank screen at the end of this group for 750 ms
-                group_message = f"Press the left arrow key if you saw the circle in the group,\n otherwise press the right arrow key.\n"
+                group_message = f"Press the left arrow key if you saw Woody in the group,\n otherwise press the right arrow key.\n"
                 display_message(window, group_message, block=False)
 
                 left_pressed = False
@@ -522,7 +523,7 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
                     elif not current_block_contains_oddball and left_pressed:
                         print("No oddball, oddball observed: incorrect")
                         await message_queue.put({'label': 'behav', 'value': 2, 'time': press_time})
-                    elif current_block_contains_oddball and right_pressed:
+                    elif not current_block_contains_oddball and right_pressed:
                         print("No oddball, oddball not observed: correct")
                         await message_queue.put({'label': 'behav', 'value': 3, 'time': press_time})
                 else:
