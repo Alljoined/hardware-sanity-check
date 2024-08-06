@@ -311,7 +311,8 @@ def create_trials(num_unique_images: int, num_blocks: int, num_groups: int, grou
     # Create a list of random numbers of range [0, num_unique_images)
     # and of length num_blocks * num_groups * group_size
     num_total_images = num_blocks * num_groups * group_size
-    images = [random.randrange(num_unique_images) for i in range(num_total_images)]
+    images = list(range(num_unique_images)) * (num_total_images // num_unique_images)
+    random.shuffle(images)
 
     # Verify and fix each group so there are no images repeated 3 times in a row in a group
     for block_index in range(num_blocks):
@@ -323,39 +324,45 @@ def create_trials(num_unique_images: int, num_blocks: int, num_groups: int, grou
                 group_start_index = block_start_index + group_index * group_size
                 group_end_index = group_start_index + group_size
 
-                # Verify the block
+                # Verify the group
                 result_index = validate_group(images, group_start_index, group_end_index)
 
-                # Fix it by regenerating the third repeated image if necessary
+                # Shuffle remaining images to fix the group
                 if result_index != -1:
-                    images[result_index] = random.randrange(num_unique_images)
+                    remaining_images = images[group_start_index:]
+                    random.shuffle(remaining_images)
+                    for index in range(group_start_index, len(images)):
+                        images[index] = remaining_images[index - group_start_index]
+
                     is_valid_group = False
 
     trials = []
 
     for block_index in range(num_blocks):
-        block_start_index = num_blocks * block_index
-        block_end_index = block_start_index + group_size
+        block_start_index = block_index * num_groups * group_size
 
-        block_trials = images[block_start_index:block_end_index]
-        
-        # Each group has a 6/51 chance of containing an oddball
-        contains_oddball = random.randrange(0, 51) < 6
+        for group_index in range(num_groups):
+            group_start_index = block_start_index + group_index * group_size
+            group_trials = images[group_start_index:group_start_index+group_size]
 
-        if contains_oddball:
-            # Put the oddball at any index except the first.
-            oddball_index = random.randrange(1, group_size + 1)
-            
-            block_trials.insert(oddball_index, -1)
+            # Each group has a 6/51 chance of containing an oddball
+            contains_oddball = random.randrange(0, 51) < 6
 
-        for block_trial_index, block_trial in enumerate(block_trials):
-            trials.append({
-                'block': block_index + 1,
-                'image': block_trial,
-                'end_of_block': (block_trial_index == len(block_trials) - 1),
-                'end_of_group': ()
-            })
+            if contains_oddball:
+                # Put the oddball at any index except the first in the group
+                oddball_index = random.randrange(1, group_size + 1)
+                group_trials.insert(oddball_index, -1)
 
+            for group_trial_index, group_trial in enumerate(group_trials):
+                trials.append({
+                    'block': block_index + 1,
+                    'image': group_trial,
+                    'end_of_block': (group_index == num_groups - 1 and group_trial_index == len(group_trials) - 1),
+                    'end_of_group': (group_trial_index == len(group_trials) - 1)
+                })             
+
+    # with open("debug2.txt", "+a") as f:
+    #     f.writelines(map(lambda x: str(x) + "\n", trials))
     return trials
 
 def display_instructions(window, session_number):
@@ -423,6 +430,7 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         print("CREATE FIRST RECORD")
         await create_record(subj, session, current_block, websocket)
 
+    current_block_contains_oddball = False
     for idx, trial in enumerate(trials):
         if trial['block'] != current_block:
             current_block = trial['block']
@@ -434,6 +442,7 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         # Check if this trial is an oddball
         is_oddball = (trial['image'] == -1)
         if is_oddball:
+            current_block_contains_oddball = True
             image = last_image
         else:
             image = images[trial['image'] - 1] # Recall that trial['images] 1-indexed and images is 0 indexed
@@ -458,7 +467,7 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         await asyncio.sleep(0.1) # 100ms soa
 
         # Rest screen with a fixation cross
-        display_dot_with_jitter(window, 0.1, 0.4)
+        display_dot_with_jitter(window, 0.1, 0)
 
         keys = event.getKeys(keyList=["escape", "space", "left", "right"], timeStamped=global_clock)
 
@@ -490,6 +499,7 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
             break
 
         # Record behavioural data (if space is or is not pressed with the oddball/non-oddball image)
+        # TODO change behavioural data to fit new oddball system ()
         if not is_oddball and not space_pressed:
             # print("No oddball, no space")
             await message_queue.put({'label': 'behav', 'value': 0, 'time': stim_time + 600})
@@ -594,9 +604,10 @@ async def main():
     # todo: cursor speed of 10
     num_unique_images = 200
     num_blocks = 16
+    num_groups = 5
     group_size = 20
     
-    trials: list = create_trials(num_unique_images, num_blocks, group_size)
+    trials: list = create_trials(num_unique_images, num_blocks, num_groups, group_size)
 
     # Setup EEG
     async with websockets.connect("wss://localhost:6868", ssl=ssl_context) as websocket:
