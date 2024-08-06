@@ -435,7 +435,8 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
     current_block_contains_oddball = False
 
     window.flip()
-    await asyncio.sleep(0.75) # blank screen at the beginning of the first group for 750 ms
+    await asyncio.sleep(0.25) # blank screen at the beginning of the first group for 750 ms
+    # TODO forget when but there's an instance when it doesn't show the blank screen - Andrew
 
     for idx, trial in enumerate(trials):
         if trial['block'] != current_block:
@@ -605,7 +606,7 @@ async def main():
     # Monitor setup
     my_monitor = Monitor(name='Q27q-1L')
     my_monitor.setWidth(59.5)       # Monitor width in centimeters (physical size of screen)
-    my_monitor.setDistance(80)    # Viewing distance in centimeters
+    my_monitor.setDistance(60)    # Viewing distance in centimeters
     my_monitor.setSizePix((2560, 1440))  # Resolution in pixels
     my_monitor.save()
 
@@ -623,7 +624,7 @@ async def main():
     # todo: cursor speed of 10
     num_unique_images = 200
     num_blocks = 16
-    num_groups = 5
+    num_groups = 50
     group_size = 20
     
     trials: list = create_trials(num_unique_images, num_blocks, num_groups, group_size)
