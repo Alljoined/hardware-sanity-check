@@ -365,13 +365,13 @@ def create_trials(num_unique_images: int, num_blocks: int, num_groups: int, grou
     #     f.writelines(map(lambda x: str(x) + "\n", trials))
     return trials
 
-def display_instructions(window, session_number):
+def display_instructions(window, session_number, num_blocks: int):
     instruction_text = (
         f"Welcome to session {session_number} of the study.\n\n"
         "In this session, you will complete a perception task.\n"
-        "This session consists of 16 experimental blocks.\n\n"
+        f"This session consists of {num_blocks} experimental block{'s' if num_blocks > 1 else ''}.\n\n"
         "You will see sequences of images appearing on the screen, your task is to "
-        "press the space bar when you see an image appear twice in a row.\n\n"
+        "indicate if a white circle with a black border is in the sequence.\n\n"
         "Sit comfortably, and keep your gaze focused on the red dot.\n\n"
         "When you are ready, press the space bar to start."
     )
@@ -408,14 +408,16 @@ def getImages(subj, session, n_images, num_blocks):
     return pil_images, coco_ids
 
 async def run_experiment(trials, window, websocket, subj, session, n_images, num_blocks):
-    last_image = None
+    # Load oddball image
+    oddball_image = Image.open("./stimulus/oddball.jpg")
+
     # Initialize an empty list to hold the image numbers for the current block
     image_sequence = []
     display_message(window, "Preparing images...", block=False)
     images, indices = getImages(subj, session, n_images, num_blocks)
 
      # Display instructions
-    display_instructions(window, session)
+    display_instructions(window, session, num_blocks)
     print(subj, session, n_images, num_blocks)
 
     # Create a record for the session
@@ -431,6 +433,10 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         await create_record(subj, session, current_block, websocket)
 
     current_block_contains_oddball = False
+
+    window.flip()
+    await asyncio.sleep(0.75) # blank screen at the beginning of the first group for 750 ms
+
     for idx, trial in enumerate(trials):
         if trial['block'] != current_block:
             current_block = trial['block']
@@ -443,10 +449,9 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         is_oddball = (trial['image'] == -1)
         if is_oddball:
             current_block_contains_oddball = True
-            image = last_image
+            image = oddball_image
         else:
             image = images[trial['image'] - 1] # Recall that trial['images] 1-indexed and images is 0 indexed
-            last_image = image
 
         # Append current image number to the sequence list
         image_sequence.append(trial['image'])
@@ -472,20 +477,9 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
         keys = event.getKeys(keyList=["escape", "space", "left", "right"], timeStamped=global_clock)
 
         escape_pressed = False
-        space_pressed = False
-        left_pressed = False
-        right_pressed = False
-        space_time = None
         for key, timestamp in keys:
             if key == "escape":
                 escape_pressed = True
-            elif key == "space":
-                space_pressed = True
-                space_time = (experiment_start_time + timestamp) * 1000
-            elif key == "left":
-                left_pressed = True
-            elif key == "right":
-                right_pressed = True
 
         if escape_pressed: # Terminate experiment early if escape is pressed
             print("Experiment terminated early.")
@@ -498,25 +492,49 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
                 await export_and_delete_record(websocket, subj, session, current_block)
             break
 
-        # Record behavioural data (if space is or is not pressed with the oddball/non-oddball image)
-        # TODO change behavioural data to fit new oddball system ()
-        if not is_oddball and not space_pressed:
-            # print("No oddball, no space")
-            await message_queue.put({'label': 'behav', 'value': 0, 'time': stim_time + 600})
-        elif not is_oddball and space_pressed:
-            # print("No oddball, space")
-            await message_queue.put({'label': 'behav', 'value': 1, 'time': space_time})
-        elif is_oddball and space_pressed:
-            # print("Oddball, space")
-            await message_queue.put({'label': 'behav', 'value': 2, 'time': space_time})
-        elif is_oddball and not space_pressed:
-            # print("Oddball, no space")
-            await message_queue.put({'label': 'behav', 'value': 3, 'time': stim_time + 600})
-
         if trial['end_of_group']:
             if EMOTIV_ON:
-                group_message = f"Press the left arrow key if you saw Shrek in the group,\n otherwise press the right arrow key.\nPress space afterwards to continue."
-                display_message(window, group_message, block=True)
+                await asyncio.sleep(0.75) # blank screen at the end of this group for 750 ms
+                group_message = f"Press the left arrow key if you saw the circle in the group,\n otherwise press the right arrow key.\n"
+                display_message(window, group_message, block=False)
+
+                left_pressed = False
+                right_pressed = False
+                press_time = None
+                keys = event.waitKeys(maxWait=2, keyList=["left","right"], timeStamped=global_clock)
+
+                if keys:
+                    for key, timestamp in keys:
+                        if key == "left":
+                            press_time = (experiment_start_time + timestamp) * 1000
+                            left_pressed = True
+                        elif key == "right":
+                            right_pressed = True
+                            press_time = (experiment_start_time + timestamp) * 1000
+
+                    # Record behavioural data (if space is or is not pressed with the oddball/non-oddball image)
+                    if current_block_contains_oddball and left_pressed:
+                        print("Oddball, oddball observed: correct")
+                        await message_queue.put({'label': 'behav', 'value': 0, 'time': press_time})
+                    elif current_block_contains_oddball and right_pressed:
+                        print("Oddball, not observed: incorrect")
+                        await message_queue.put({'label': 'behav', 'value': 1, 'time': press_time})
+                    elif not current_block_contains_oddball and left_pressed:
+                        print("No oddball, oddball observed: incorrect")
+                        await message_queue.put({'label': 'behav', 'value': 2, 'time': press_time})
+                    elif current_block_contains_oddball and right_pressed:
+                        print("No oddball, oddball not observed: correct")
+                        await message_queue.put({'label': 'behav', 'value': 3, 'time': press_time})
+                else:
+                    # user did not input any keys.
+                    if current_block_contains_oddball:
+                        print("Oddball, no keys pressed")
+                        await message_queue.put({'label': 'behav', 'value': 4, 'time': stim_time + 200})
+                    else:
+                        print("No oddball, no keys pressed")
+                        await message_queue.put({'label': 'behav', 'value': 5, 'time': stim_time + 200})
+                
+                await asyncio.sleep(0.75) # blank screen at the beginning of the next group for 750ms
         # Check if end of block
         if trial['end_of_block']:
             if EMOTIV_ON:
@@ -533,7 +551,7 @@ async def run_experiment(trials, window, websocket, subj, session, n_images, num
             image_sequence = []
 
             # Display break message at the end of each block
-            break_message = f"You've completed {trial['block']} blocks.\n\nTake a little break and press the space bar when you're ready to continue to the next block."
+            break_message = f"You've completed {trial['block']} block(s).\n\nTake a little break and press the space bar when you're ready to continue to the next block."
             display_message(window, break_message, block=True)
 
             # Create a new record for the next block
